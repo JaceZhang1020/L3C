@@ -1,0 +1,10 @@
+{
+    "seed": 65131,
+    "mode": "multi",
+    "ndim": 8,
+    "max_steps": 695,
+    "transition_noise": 0.0008963962525223851,
+    "reward_noise": 0.009262413962174441,
+    "use_potential": 1,
+    "risk_limit": 0.5295213674515721
+}

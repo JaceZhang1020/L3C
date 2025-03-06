@@ -17,6 +17,10 @@ import torch.nn as nn
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.evaluation import evaluate_policy
 import json
+from stable_baselines3 import SAC
+import torch.nn as nn
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+import torch
 
 GLOBAL_SEED = None  # 默认为None表示随机
 
@@ -96,6 +100,58 @@ def actfunc(raw_name):
         return lambda x:x
     else:
         raise ValueError(f"Invalid activation function name: {name}")
+    
+class LSTMFeatureExtractor(BaseFeaturesExtractor):
+    def __init__(self, observation_space, features_dim=64, lstm_hidden_size=32, n_lstm_layers=2):
+        super().__init__(observation_space, features_dim)
+        
+        self.lstm_hidden_size = lstm_hidden_size
+        self.n_lstm_layers = n_lstm_layers
+        self.num_directions = 1  # 单向LSTM
+        
+        # 定义LSTM层
+        self.lstm = nn.LSTM(
+            input_size=observation_space.shape[0],
+            hidden_size=lstm_hidden_size,
+            num_layers=n_lstm_layers,
+            batch_first=True
+        )
+        
+        # 定义全连接层
+        self.fc = nn.Sequential(
+            nn.Linear(lstm_hidden_size, features_dim),
+            nn.ReLU()
+        )
+        
+        # 初始化隐藏状态
+        self.hidden = None
+
+    def reset_hidden_states(self, batch_size=1):
+        """重置LSTM隐藏状态"""
+        device = next(self.parameters()).device
+        h0 = torch.zeros(self.n_lstm_layers * self.num_directions, 
+                        batch_size, self.lstm_hidden_size).to(device)
+        c0 = torch.zeros(self.n_lstm_layers * self.num_directions, 
+                        batch_size, self.lstm_hidden_size).to(device)
+        self.hidden = (h0, c0)
+
+    def forward(self, observations):
+        # 确保输入是3D的 [batch_size, sequence_length, features]
+        if len(observations.shape) == 2:
+            observations = observations.unsqueeze(1)
+            
+        batch_size = observations.shape[0]
+        
+        # 如果隐藏状态为None或batch size不匹配，重置隐藏状态
+        if self.hidden is None or self.hidden[0].shape[1] != batch_size:
+            self.reset_hidden_states(batch_size)
+            
+        lstm_out, self.hidden = self.lstm(observations, self.hidden)
+        features = self.fc(lstm_out[:, -1, :])
+        return features
+    
+    def reset_hidden_states(self):
+        self.hidden = None
 
 class RewardCallback(BaseCallback):
     def __init__(self, verbose=0):
@@ -352,7 +408,8 @@ class RandomFourier(object):
         x = t / self.max_steps
         y = 0
         for order, coeff in self.coeffs:
-            y += coeff[:,0] * np.sin(order * x) + coeff[:,1] * np.cos(order * x)
+            # y += coeff[:,0] * np.sin(order * x) + coeff[:,1] * np.cos(order * x)
+            y += np.nan_to_num(coeff[:, 0] * np.sin(order * x)) + np.nan_to_num(coeff[:, 1] * np.cos(order * x))
         return y
 
 class RandomGoal(object):
@@ -717,7 +774,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', type=int, default=None, help='Random seed')
-    parser.add_argument('--mode', type=str, choices=['static','dynamic','multi','consis'], 
+    parser.add_argument('--mode', type=str, choices=['static','dynamic','universal'], 
                        default=None, help='Force task mode')
     parser.add_argument('--ndim', type=int, default=None, 
                        help='Force state dimension (3-32)')
@@ -787,7 +844,7 @@ if __name__ == "__main__":
             
     avg_reward_random = acc_reward / steps if steps > 0 else 0
     print(f"Random Policy Summary: Cumulative Reward: {acc_reward}, Average Reward per Step: {avg_reward_random}")
-    env_random.unwrapped.visualize_and_save("random_policy_result.pdf", training_rewards=None)
+    # env_random.unwrapped.visualize_and_save("random_policy_result.pdf", training_rewards=None)
 
     print("\n=== Testing PPO-MLP Policy ===")
     env_ppo_mlp = AnyMDPVisualizer(max_steps=train_steps)
@@ -839,111 +896,257 @@ if __name__ == "__main__":
             state, info = env_ppo_mlp.reset()
     avg_reward_mlp_post = acc_reward_mlp_post / steps if steps > 0 else 0
     print(f"PPO-MLP Post-training Performance: Cumulative Reward: {acc_reward_mlp_post}, Average Reward per Step: {avg_reward_mlp_post}, Successes: {success_count_mlp_post}")
-    env_ppo_mlp.unwrapped.visualize_and_save("ppo_mlp_policy_result.pdf")
+    # env_ppo_mlp.unwrapped.visualize_and_save("ppo_mlp_policy_result.pdf")
 
-    print("\n=== Testing PPO-HYBRID Policy ===")
-    env_ppo_hybrid = AnyMDPVisualizer(max_steps=train_steps)
-    env_ppo_hybrid.set_task(task, verbose=True, reward_shaping=True)
+    # print("\n=== Testing PPO-HYBRID Policy ===")
+    # env_ppo_hybrid = AnyMDPVisualizer(max_steps=train_steps)
+    # env_ppo_hybrid.set_task(task, verbose=True, reward_shaping=True)
 
-    model_hybrid = RecurrentPPO(
-        "MlpLstmPolicy",
-        env_ppo_hybrid,
-        verbose=1,
-        seed=GLOBAL_SEED,
-        learning_rate=3e-4,
-        n_steps=2048,
-        batch_size=64,
-        n_epochs=10,
-        gamma=0.99,
-        # clip_range=0.2,
-        # clip_range_vf=0.2,
-        # max_grad_norm=0.5
-        # ent_coef=0.01
-        # gae_lambda=0.95,
-        policy_kwargs=dict(
-            lstm_hidden_size=32,
-            n_lstm_layers=2,
-            enable_critic_lstm=True,
-            net_arch=dict(
-                pi=[64, 32],
-                vf=[64, 32]
-            ),
-            activation_fn=nn.ReLU
-        ),
-    )
+    # model_hybrid = RecurrentPPO(
+    #     "MlpLstmPolicy",
+    #     env_ppo_hybrid,
+    #     verbose=1,
+    #     seed=GLOBAL_SEED,
+    #     learning_rate=3e-4,
+    #     n_steps=2048,
+    #     batch_size=64,
+    #     n_epochs=10,
+    #     gamma=0.99,
+    #     # clip_range=0.2,
+    #     # clip_range_vf=0.2,
+    #     # max_grad_norm=0.5
+    #     # ent_coef=0.01
+    #     # gae_lambda=0.95,
+    #     policy_kwargs=dict(
+    #         lstm_hidden_size=32,
+    #         n_lstm_layers=2,
+    #         enable_critic_lstm=True,
+    #         net_arch=dict(
+    #             pi=[64, 32],
+    #             vf=[64, 32]
+    #         ),
+    #         activation_fn=nn.ReLU
+    #     ),
+    # )
 
-    # 评估初始性能
-    state, info = env_ppo_hybrid.reset()
-    acc_reward_hyb_pre = 0
-    steps = 0
-    success_count_hyb_pre = 0
-    lstm_states = None
-    done = True
-    while steps < eval_steps:
-        action, lstm_states = model_hybrid.predict(
-            state,
-            state=lstm_states,
-            episode_start=done,
-            deterministic=True
-        )
-        state, reward, terminated, truncated, info = env_ppo_hybrid.step(action)
-        acc_reward_hyb_pre += reward
-        steps += 1
-        if terminated or truncated:
-            if env_ppo_hybrid.unwrapped._last_success:
-                success_count_hyb_pre += 1
-            state, info = env_ppo_hybrid.reset()
-            lstm_states = None
-            done = True
-        else:
-            done = False
-    avg_reward_hyb_pre = acc_reward_hyb_pre / steps if steps > 0 else 0
-    print(f"PPO-HYBRID Pre-training Performance: Cumulative Reward: {acc_reward_hyb_pre}, Average Reward per Step: {avg_reward_hyb_pre}, Successes: {success_count_hyb_pre}")
-
-    # 训练
-    model_hybrid.learn(total_timesteps=train_steps)
-
-    # 评估训练后性能
-    state, info = env_ppo_hybrid.reset()
-    acc_reward_hyb_post = 0
-    steps = 0
-    success_count_hyb_post = 0
-    lstm_states = None  
-    done = True
-    while steps < eval_steps:
-        action, lstm_states = model_hybrid.predict(
-            state,
-            state=lstm_states, 
-            episode_start=done,
-            deterministic=True
-        )
-        state, reward, terminated, truncated, info = env_ppo_hybrid.step(action)
-        acc_reward_hyb_post += reward
-        steps += 1
-        if terminated or truncated:
-            if env_ppo_hybrid.unwrapped._last_success:
-                success_count_hyb_post += 1
-            state, info = env_ppo_hybrid.reset()
-            lstm_states = None
-            done = True
-        else:
-            done = False
-    avg_reward_hyb_post = acc_reward_hyb_post / steps if steps > 0 else 0
-    print(f"PPO-HYBRID Post-training Performance: Cumulative Reward: {acc_reward_hyb_post}, Average Reward per Step: {avg_reward_hyb_post}, Successes: {success_count_hyb_post}")
-    env_ppo_hybrid.unwrapped.visualize_and_save("ppo_hybrid_policy_result.pdf")
     # # 评估初始性能
-    # mean_reward, std_reward = evaluate_policy(model_hybrid, env_ppo_hybrid, n_eval_episodes=10)
-    # print(f"Before Training: Mean reward: {mean_reward}, Std reward: {std_reward}")
+    # state, info = env_ppo_hybrid.reset()
+    # acc_reward_hyb_pre = 0
+    # steps = 0
+    # success_count_hyb_pre = 0
+    # lstm_states = None
+    # done = True
+    # while steps < eval_steps:
+    #     action, lstm_states = model_hybrid.predict(
+    #         state,
+    #         state=lstm_states,
+    #         episode_start=done,
+    #         deterministic=True
+    #     )
+    #     state, reward, terminated, truncated, info = env_ppo_hybrid.step(action)
+    #     acc_reward_hyb_pre += reward
+    #     steps += 1
+    #     if terminated or truncated:
+    #         if env_ppo_hybrid.unwrapped._last_success:
+    #             success_count_hyb_pre += 1
+    #         state, info = env_ppo_hybrid.reset()
+    #         lstm_states = None
+    #         done = True
+    #     else:
+    #         done = False
+    # avg_reward_hyb_pre = acc_reward_hyb_pre / steps if steps > 0 else 0
+    # print(f"PPO-HYBRID Pre-training Performance: Cumulative Reward: {acc_reward_hyb_pre}, Average Reward per Step: {avg_reward_hyb_pre}, Successes: {success_count_hyb_pre}")
 
     # # 训练
     # model_hybrid.learn(total_timesteps=train_steps)
 
     # # 评估训练后性能
-    # mean_reward, std_reward = evaluate_policy(model_hybrid, env_ppo_hybrid, n_eval_episodes=10)
-    # env_ppo_hybrid.visualize_and_save("ppo_hyb_result.pdf")
-    # print(f"After Training: Mean reward: {mean_reward}, Std reward: {std_reward}")
+    # state, info = env_ppo_hybrid.reset()
+    # acc_reward_hyb_post = 0
+    # steps = 0
+    # success_count_hyb_post = 0
+    # lstm_states = None  
+    # done = True
+    # while steps < eval_steps:
+    #     action, lstm_states = model_hybrid.predict(
+    #         state,
+    #         state=lstm_states, 
+    #         episode_start=done,
+    #         deterministic=True
+    #     )
+    #     state, reward, terminated, truncated, info = env_ppo_hybrid.step(action)
+    #     acc_reward_hyb_post += reward
+    #     steps += 1
+    #     if terminated or truncated:
+    #         if env_ppo_hybrid.unwrapped._last_success:
+    #             success_count_hyb_post += 1
+    #         state, info = env_ppo_hybrid.reset()
+    #         lstm_states = None
+    #         done = True
+    #     else:
+    #         done = False
+    # avg_reward_hyb_post = acc_reward_hyb_post / steps if steps > 0 else 0
+    # print(f"PPO-HYBRID Post-training Performance: Cumulative Reward: {acc_reward_hyb_post}, Average Reward per Step: {avg_reward_hyb_post}, Successes: {success_count_hyb_post}")
+    # # env_ppo_hybrid.unwrapped.visualize_and_save("ppo_hybrid_policy_result.pdf")
 
-    # 实验总结
+    print("\n=== Testing SAC Policy ===")
+    env_sac = AnyMDPVisualizer(max_steps=train_steps)
+    env_sac.set_task(task, verbose=True, reward_shaping=True)
+
+    model_sac = SAC(
+        "MlpPolicy",
+        env_sac,
+        verbose=1,
+        seed=GLOBAL_SEED,
+        learning_rate=3e-4,
+        buffer_size=100000,
+        learning_starts=1000,
+        batch_size=64,
+        tau=0.005,
+        gamma=0.99,
+        train_freq=1,
+        gradient_steps=1,
+        ent_coef='auto',
+        policy_kwargs=dict(
+            net_arch=dict(
+                pi=[64, 32],
+                qf=[64, 32]
+            )
+        )
+    )
+
+    # 评估初始性能
+    state, info = env_sac.reset()
+    acc_reward_sac_pre = 0
+    steps = 0
+    success_count_sac_pre = 0
+    while steps < eval_steps:
+        action, _ = model_sac.predict(state, deterministic=True)
+        state, reward, terminated, truncated, info = env_sac.step(action)
+        acc_reward_sac_pre += reward
+        steps += 1
+        if terminated or truncated:
+            if env_sac.unwrapped._last_success:
+                success_count_sac_pre += 1
+            state, info = env_sac.reset()
+    avg_reward_sac_pre = acc_reward_sac_pre / steps if steps > 0 else 0
+    print(f"SAC Pre-training Performance: Cumulative Reward: {acc_reward_sac_pre}, Average Reward per Step: {avg_reward_sac_pre}, Successes: {success_count_sac_pre}")
+
+    # 训练
+    model_sac.learn(total_timesteps=train_steps)
+
+    # 评估训练后性能
+    state, info = env_sac.reset()
+    acc_reward_sac_post = 0
+    steps = 0
+    success_count_sac_post = 0
+    while steps < eval_steps:
+        action, _ = model_sac.predict(state, deterministic=True)
+        state, reward, terminated, truncated, info = env_sac.step(action)
+        acc_reward_sac_post += reward
+        steps += 1
+        if terminated or truncated:
+            if env_sac.unwrapped._last_success:
+                success_count_sac_post += 1
+            state, info = env_sac.reset()
+    avg_reward_sac_post = acc_reward_sac_post / steps if steps > 0 else 0
+    print(f"SAC Post-training Performance: Cumulative Reward: {acc_reward_sac_post}, Average Reward per Step: {avg_reward_sac_post}, Successes: {success_count_sac_post}")
+    # # env_sac.unwrapped.visualize_and_save("sac_policy_result.pdf")
+
+    # print("\n=== Testing SAC-LSTM Policy ===")
+    # env_sac = AnyMDPVisualizer(max_steps=train_steps)
+    # env_sac.set_task(task, verbose=True, reward_shaping=True)
+
+    # # 自定义策略网络参数
+    # policy_kwargs = dict(
+    #     features_extractor_class=LSTMFeatureExtractor,
+    #     features_extractor_kwargs=dict(
+    #         features_dim=64,
+    #         lstm_hidden_size=32,
+    #         n_lstm_layers=2
+    #     ),
+    #     net_arch=[64, 32]  
+    # )
+
+    # model_sac = SAC(
+    #     "MlpPolicy",
+    #     env_sac,
+    #     verbose=1,
+    #     seed=GLOBAL_SEED,
+    #     learning_rate=3e-4,
+    #     buffer_size=100000,
+    #     learning_starts=1000,
+    #     batch_size=64,
+    #     tau=0.005,
+    #     gamma=0.99,
+    #     train_freq=1,
+    #     gradient_steps=1,
+    #     ent_coef='auto',
+    #     policy_kwargs=policy_kwargs
+    # )
+
+    # # 等待一步来确保模型完全初始化
+    # env_sac.reset()
+    # model_sac.learn(total_timesteps=1)  # 运行一步来完成初始化
+
+    # # 评估初始性能
+    # state, info = env_sac.reset()
+    # acc_reward_sac_pre = 0
+    # steps = 0
+    # success_count_sac_pre = 0
+
+    # # 确保在每个episode开始时重置LSTM状态
+    # if hasattr(model_sac.policy, 'features_extractor') and \
+    # hasattr(model_sac.policy.features_extractor, 'reset_hidden_states'):
+    #     model_sac.policy.features_extractor.reset_hidden_states()
+
+    # while steps < eval_steps:
+    #     action, _ = model_sac.predict(state, deterministic=True)
+    #     state, reward, terminated, truncated, info = env_sac.step(action)
+    #     acc_reward_sac_pre += reward
+    #     steps += 1
+    #     if terminated or truncated:
+    #         if env_sac.unwrapped._last_success:
+    #             success_count_sac_pre += 1
+    #         state, info = env_sac.reset()
+    #         # 在每个episode结束时重置LSTM状态
+    #         if hasattr(model_sac.policy, 'features_extractor') and \
+    #         hasattr(model_sac.policy.features_extractor, 'reset_hidden_states'):
+    #             model_sac.policy.features_extractor.reset_hidden_states()
+
+    # avg_reward_sac_pre = acc_reward_sac_pre / steps if steps > 0 else 0
+    # print(f"SAC-LSTM Pre-training Performance: Cumulative Reward: {acc_reward_sac_pre}, Average Reward per Step: {avg_reward_sac_pre}, Successes: {success_count_sac_pre}")
+
+    # # 训练
+    # model_sac.learn(total_timesteps=train_steps)
+
+    # # 评估训练后性能
+    # state, info = env_sac.reset()
+    # acc_reward_sac_post = 0
+    # steps = 0
+    # success_count_sac_post = 0
+
+    # # 重置LSTM状态
+    # if hasattr(model_sac.policy, 'features_extractor') and \
+    # hasattr(model_sac.policy.features_extractor, 'reset_hidden_states'):
+    #     model_sac.policy.features_extractor.reset_hidden_states()
+
+    # while steps < eval_steps:
+    #     action, _ = model_sac.predict(state, deterministic=True)
+    #     state, reward, terminated, truncated, info = env_sac.step(action)
+    #     acc_reward_sac_post += reward
+    #     steps += 1
+    #     if terminated or truncated:
+    #         if env_sac.unwrapped._last_success:
+    #             success_count_sac_post += 1
+    #         state, info = env_sac.reset()
+    #         if hasattr(model_sac.policy, 'features_extractor') and \
+    #         hasattr(model_sac.policy.features_extractor, 'reset_hidden_states'):
+    #             model_sac.policy.features_extractor.reset_hidden_states()
+
+    # avg_reward_sac_post = acc_reward_sac_post / steps if steps > 0 else 0
+    # print(f"SAC-LSTM Post-training Performance: Cumulative Reward: {acc_reward_sac_post}, Average Reward per Step: {avg_reward_sac_post}, Successes: {success_count_sac_post}")
+
     print("\n=== Experiment Summary ===")
     if args.seed is not None:
         print(f"Used specified seed: {args.seed}")
@@ -951,8 +1154,12 @@ if __name__ == "__main__":
         current_seed = GLOBAL_SEED if GLOBAL_SEED is not None else "Random (No seed specified)"
         print(f"Random seed used: {current_seed}")
     print(f"RANDOM POLICY  | Cumulative Reward: {acc_reward}, Average: {avg_reward_random}, Successes: {success_count_random}")
-    print(f"PPO-MLP      Pre-training | Cumulative Reward: {acc_reward_mlp_pre}, Average: {avg_reward_mlp_pre}, Successes: {success_count_mlp_pre}", )
-    print(f"PPO-MLP      Post-training| Cumulative Reward: {acc_reward_mlp_post}, Average: {avg_reward_mlp_post}, Successes: {success_count_mlp_post}")
-    print(f"PPO-HYBRID   Pre-training | Cumulative Reward: {acc_reward_hyb_pre}, Average {avg_reward_hyb_pre}, Successes: {success_count_hyb_pre}")
-    print(f"PPO-HYBRID   Post-training| Cumulative Reward: {acc_reward_hyb_post}, Average: {avg_reward_hyb_post}, Successes: {success_count_hyb_post}")
+    print(f"PPO-RNN      Pre-training | Cumulative Reward: {acc_reward_mlp_pre}, Average: {avg_reward_mlp_pre}, Successes: {success_count_mlp_pre}", )
+    print(f"PPO-RNN      Post-training| Cumulative Reward: {acc_reward_mlp_post}, Average: {avg_reward_mlp_post}, Successes: {success_count_mlp_post}")
+    # print(f"PPO-HYBRID   Pre-training | Cumulative Reward: {acc_reward_hyb_pre}, Average {avg_reward_hyb_pre}, Successes: {success_count_hyb_pre}")
+    # print(f"PPO-HYBRID   Post-training| Cumulative Reward: {acc_reward_hyb_post}, Average: {avg_reward_hyb_post}, Successes: {success_count_hyb_post}")
+    print(f"SAC          Pre-training | Cumulative Reward: {acc_reward_sac_pre}, Average: {avg_reward_sac_pre}, Successes: {success_count_sac_pre}")
+    print(f"SAC          Post-training| Cumulative Reward: {acc_reward_sac_post}, Average: {avg_reward_sac_post}, Successes: {success_count_sac_post}")
+    # print(f"SAC-LSTM     Pre-training | Cumulative Reward: {acc_reward_sac_pre}, Average: {avg_reward_sac_pre}, Successes: {success_count_sac_pre}")
+    # print(f"SAC-LSTM     Post-training| Cumulative Reward: {acc_reward_sac_post}, Average: {avg_reward_sac_post}, Successes: {success_count_sac_post}")
     print("\nTest Passed")

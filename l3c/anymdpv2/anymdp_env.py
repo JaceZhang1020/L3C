@@ -57,21 +57,19 @@ class AnyMDPEnv(gym.Env):
 
         ### update inner state (dynamics)
         inner_deta = self.action_map(self._inner_state, action)
-        #print('inner_deta: ', inner_deta)
-        #print("inner_state: ", self._inner_state)
         next_inner_state = (self._inner_state + 
             inner_deta * self.action_weight + 
             self.transition_noise * random.normal(size=(self.ndim,)))
 
         ### Essential Rewards specified by different goals
         reward = self.average_cost
-        done = False
+        terminated = False
         for goal in self.goals:
             r,d,info=goal(self._inner_state, next_inner_state, t=self.steps, need_reward_shaping=self.reward_shaping)
             if(self.reward_shaping):
                 r = info["shaped_reward"]
             reward += r
-            done = done or d
+            terminated = terminated or d
 
         ### Calculate Universal Random Reward
         if("random_reward_fields" in self.__dict__):
@@ -87,14 +85,12 @@ class AnyMDPEnv(gym.Env):
         self._inner_state = next_inner_state
         self._state = self.observation_map(self._inner_state)
         oob = (numpy.abs(self._inner_state) > self.box_size)
-        done = (self.steps >= self.max_steps or done or oob.any())
-
-        #print("observation：", self._state)
-
-        if(done):
+        
+        truncated = (self.steps >= self.max_steps or oob.any())  
+        if(terminated or truncated):
             self.need_reset = True
 
-        return self._state, reward, done, info
+        return self._state, reward, terminated, truncated, info
     
     @property
     def state(self):

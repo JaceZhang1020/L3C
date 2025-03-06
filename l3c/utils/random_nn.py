@@ -54,7 +54,7 @@ def actfunc(raw_name):
         k = (T - B) / 2
         return lambda x: k*numpy.tanh(x/k) + k + B
     elif(name == 'sin'):
-        return lambda x: numpy.concat([numpy.sin(x[:len(x)//2]), numpy.cos(x[len(x)//2:])], axis=-1)
+        return lambda x: numpy.concatenate([numpy.sin(x[:len(x)//2]), numpy.cos(x[len(x)//2:])], axis=-1)
     elif(name == 'none'):
         return lambda x:x
     else:

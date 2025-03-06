@@ -8,6 +8,8 @@ if __name__=="__main__":
     from sb3_contrib import RecurrentPPO
     from stable_baselines3.common.env_util import make_vec_env
     from stable_baselines3.common.evaluation import evaluate_policy
+    from stable_baselines3 import SAC
+    import torch.nn as nn
 
     task = AnyMDPv2TaskSampler(state_dim=64, 
                              action_dim=16)
@@ -18,7 +20,7 @@ if __name__=="__main__":
     args = argparse.ArgumentParser()
     args.add_argument("--max_step", type=int, default=80000)
     args.add_argument("--lr", type=float, default=3e-4)
-    args.add_argument("--run", choices=["mlp", "lstm", "both"], default="both")
+    args.add_argument("--run", choices=["mlp", "lstm", "sac", "all"], default="all")
     args = args.parse_args()
 
     max_step = args.max_step
@@ -31,7 +33,7 @@ if __name__=="__main__":
         learning_rate=lr,   # 学习率
         batch_size=64,        # 批量大小
         gamma=0.99,           # 折扣因子
-        tensorboard_log="./ppo_tensorboard/"  # TensorBoard 日志目录
+        # tensorboard_log="./ppo_tensorboard/"  # TensorBoard 日志目录
     )
 
     model_lstm = RecurrentPPO(
@@ -50,30 +52,69 @@ if __name__=="__main__":
             "enable_critic_lstm": True # Critic 网络也使用 LSTM
         },
         clip_range=0.2,       # PPO 的 clip 范围
-        tensorboard_log="./ppo_tensorboard/"  # TensorBoard 日志目录
+        # tensorboard_log="./ppo_tensorboard/"  # TensorBoard 日志目录
+    )
+
+    model_sac = SAC(  
+                "MlpPolicy",
+                env,
+                verbose=0,
+                learning_rate=3e-4,
+                batch_size=256,
+                buffer_size=1000000,
+                learning_starts=100,
+                train_freq=1,
+                gradient_steps=1,
+                policy_kwargs=dict(
+                    net_arch=dict(
+                        pi=[256, 256],
+                        qf=[256, 256]
+                    ),
+                    activation_fn=nn.ReLU
+                ),
     )
 
 
-    if(args.run == "mlp" or args.run == "both"):
+    if(args.run == "mlp" or args.run == "all"):
 
         print(f"Training MLP Policy for {max_step} steps")
 
-        mean_reward, std_reward = evaluate_policy(model_mlp, env, n_eval_episodes=10)
-        print(f"Before Training: Mean reward: {mean_reward}, Std reward: {std_reward}")
+        mean_reward_mlp_pre, std_reward_mlp_pre = evaluate_policy(model_mlp, env, n_eval_episodes=10)
+        print(f"Before Training: Mean reward: {mean_reward_mlp_pre}, Std reward: {std_reward_mlp_pre}")
 
         model_mlp.learn(total_timesteps=max_step)
 
-        mean_reward, std_reward = evaluate_policy(model_mlp, env, n_eval_episodes=10)
-        print(f"After Training: Mean reward: {mean_reward}, Std reward: {std_reward}")
+        mean_reward_mlp_post, std_reward_mlp_post = evaluate_policy(model_mlp, env, n_eval_episodes=10)
+        print(f"After Training: Mean reward: {mean_reward_mlp_post}, Std reward: {std_reward_mlp_post}")
 
-    if(args.run == "lstm" or args.run == "both"):
+    if(args.run == "lstm" or args.run == "all"):
 
-        print(f"Training LSTMLSTM Policy for {max_step} steps")
+        print(f"Training LSTM Policy for {max_step} steps")
 
-        mean_reward, std_reward = evaluate_policy(model_lstm, env, n_eval_episodes=10)
-        print(f"Before Training: Mean reward: {mean_reward}, Std reward: {std_reward}")
+        mean_reward_lstm_pre, std_reward_lstm_pre = evaluate_policy(model_lstm, env, n_eval_episodes=10)
+        print(f"Before Training: Mean reward: {mean_reward_lstm_pre}, Std reward: {std_reward_lstm_pre}")
 
         model_lstm.learn(total_timesteps=max_step)
 
-        mean_reward, std_reward = evaluate_policy(model_lstm, env, n_eval_episodes=10)
-        print(f"After Training: Mean reward: {mean_reward}, Std reward: {std_reward}")
+        mean_reward_lstm_post, std_reward_lstm_post = evaluate_policy(model_lstm, env, n_eval_episodes=10)
+        print(f"After Training: Mean reward: {mean_reward_lstm_post}, Std reward: {std_reward_lstm_post}")
+
+    if(args.run == "sac" or args.run == "all"):
+
+        print(f"Training SAC Policy for {max_step} steps")
+
+        mean_reward_sac_pre, std_reward_sac_pre = evaluate_policy(model_sac, env, n_eval_episodes=10)
+        print(f"Before Training: Mean reward: {mean_reward_sac_pre}, Std reward: {std_reward_sac_pre}")
+
+        model_sac.learn(total_timesteps=max_step)
+
+        mean_reward_sac_post, std_reward_sac_post = evaluate_policy(model_lstm, env, n_eval_episodes=10)
+        print(f"After Training: Mean reward: {mean_reward_sac_post}, Std reward: {std_reward_sac_post}")
+
+        print(f"result summary")
+        print(f"Before PPO-MLPTraining: Mean reward: {mean_reward_mlp_pre}, Std reward: {std_reward_mlp_pre}")
+        print(f"After PPO-MLP Training: Mean reward: {mean_reward_mlp_post}, Std reward: {std_reward_mlp_post}")
+        print(f"Before PPO-LSTM Training: Mean reward: {mean_reward_lstm_pre}, Std reward: {std_reward_lstm_pre}")
+        print(f"After PPO-LSTM Training: Mean reward: {mean_reward_lstm_post}, Std reward: {std_reward_lstm_post}")
+        print(f"Before SAC Training: Mean reward: {mean_reward_sac_pre}, Std reward: {std_reward_sac_pre}")
+        print(f"After SAC Training: Mean reward: {mean_reward_sac_post}, Std reward: {std_reward_sac_post}")

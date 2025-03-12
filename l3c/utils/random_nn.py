@@ -5,6 +5,34 @@ import numpy
 import re
 from numpy import random
 
+class StaticPosition:
+    def __init__(self, position):
+        self.position = position
+        
+    def __call__(self, t):
+        return self.position
+
+def sigmoid(x):
+    return 1/(1+numpy.exp(-x))
+
+def leaky_relu(x):
+    return numpy.maximum(0.01*x, x)
+
+def identity(x):
+    return x
+
+def sin_cos(x):
+    return numpy.concatenate([numpy.sin(x[:len(x)//2]), numpy.cos(x[len(x)//2:])], axis=-1)
+
+class BoundedActivation:
+    def __init__(self, min_val, max_val):
+        self.min_val = min_val
+        self.max_val = max_val
+        self.k = (max_val - min_val) / 2
+        
+    def __call__(self, x):
+        return self.k*numpy.tanh(x/self.k) + self.k + self.min_val
+
 def pseudo_random_seed(hyperseed=0):
     '''
     Generate a pseudo random seed based on current time and system random number
@@ -37,12 +65,13 @@ def actfunc(raw_name):
         name = 'none'
     else:
         name = raw_name.lower()
+    
     if(name=='sigmoid'):
-        return lambda x: 1/(1+numpy.exp(-x))
+        return sigmoid
     elif(name=='tanh'):
         return numpy.tanh
     elif(name.find('leakyrelu') >= 0):
-        return lambda x: numpy.maximum(0.01*x, x)
+        return leaky_relu
     elif(name.find('bounded') >= 0):
         pattern = r"bounded\(([-+]?\d*\.\d+|[-+]?\d+),\s*([-+]?\d*\.\d+|[-+]?\d+)\)"
         match = re.match(pattern, name)
@@ -51,12 +80,11 @@ def actfunc(raw_name):
             T = float(match.group(2).strip())
         else:
             raise ValueError("Bounded support only BOUNDED(min,max) type")
-        k = (T - B) / 2
-        return lambda x: k*numpy.tanh(x/k) + k + B
+        return BoundedActivation(B, T)
     elif(name == 'sin'):
-        return lambda x: numpy.concatenate([numpy.sin(x[:len(x)//2]), numpy.cos(x[len(x)//2:])], axis=-1)
+        return sin_cos
     elif(name == 'none'):
-        return lambda x:x
+        return identity
     else:
         raise ValueError(f"Invalid activation function name: {name}")
 
@@ -186,7 +214,7 @@ class RandomGoal(object):
                 ntry += 1
             if(ntry >= max_try):
                 raise RuntimeError(f"Failed to generate goal position after {max_try} tries.")
-            self.position = lambda t:position
+            self.position = StaticPosition(position)
         elif(type == 'fourier'):
             self.position = RandomFourier(ndim)
         else:

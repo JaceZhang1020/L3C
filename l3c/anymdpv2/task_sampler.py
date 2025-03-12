@@ -9,12 +9,30 @@ from numpy import random
 from copy import deepcopy
 from l3c.utils import pseudo_random_seed, RandomMLP, RandomGoal
 
+class ActionMapper:
+    def __init__(self, s_map, a_map):
+        self.s_map = s_map
+        self.a_map = a_map
+    
+    def __call__(self, s, a):
+        return self.s_map(s) + self.a_map(a)
+
+class RewardField:
+    def __init__(self, random_reward_fields, factor):
+        self.random_reward_fields = random_reward_fields
+        self.factor = factor
+    
+    def __call__(self, x):
+        return self.factor * max(self.random_reward_fields(x) - 0.5, 0.0)
+
 def sample_action_mapping(task):
     ndim = task['ndim']
     action_dim = task['action_dim']
     s_map = RandomMLP(ndim, ndim, activation='tanh', biases=True)
     a_map = RandomMLP(action_dim, ndim, activation='tanh', biases=False)
-    func = lambda s,a: s_map(s) + a_map(a)
+    
+    # Replace lambda with class instance
+    func = ActionMapper(s_map, a_map)
 
     return {"action_map": func}
 
@@ -100,7 +118,10 @@ def sample_universal_reward(task):
                         activation=['sin', 'tanh'],
                         biases=[True, False])
     factor = random.exponential(1.0)
-    func = lambda x: factor * max(random_reward_fields(x) - 0.5, 0.0)
+    
+    # Replace lambda with class instance
+    func = RewardField(random_reward_fields, factor)
+    
     return {"random_reward_fields": func}
 
 def AnyMDPv2TaskSampler(state_dim:int=256,
